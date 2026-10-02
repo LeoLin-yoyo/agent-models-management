@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 运行时数据（日志、桥接路由 bridge.json、测试结果等，由服务自动生成）
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 日志
+*.log
+
+# 密钥 / 环境变量
+.env
+.env.*
+*.pem
+*.key
+
+# 本地工具
+.mimosa/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

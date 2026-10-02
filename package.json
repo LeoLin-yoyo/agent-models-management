@@ -1,0 +1,14 @@
+{
+  "name": "agent-models-management",
+  "version": "1.0.0",
+  "description": "本地可视化平台：统一管理 opencode / pi 的 LLM provider 与模型配置，支持一键拉取远端模型同步与一键测试",
+  "private": true,
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

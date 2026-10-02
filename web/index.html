@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent 模型管理</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>Agent 模型管理</h1>
+      <span class="sub">opencode · pi</span>
+      <span id="bridge-chip" class="chip unknown" title="本地 QUIC 桥接（被墙的 API 由此转发）">🌉 桥接 …</span>
+    </div>
+    <div class="header-actions">
+      <button id="btn-test-all" class="btn">⚡ 一键测试全部</button>
+      <button id="btn-cross-sync" class="btn" title="在 opencode 与 pi 之间同步 LLM API（Provider）">⇄ 跨工具同步</button>
+      <button id="btn-add-provider" class="btn primary">＋ 新增 Provider</button>
+      <button id="btn-refresh" class="btn ghost" title="重新读取配置文件">刷新</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar"></aside>
+    <section id="content"></section>
+  </main>
+
+  <!-- 新增/编辑 Provider -->
+  <div class="modal-overlay hidden" id="modal-provider">
+    <div class="modal">
+      <h2 id="provider-modal-title">新增 Provider</h2>
+      <div class="form">
+        <label>所属工具 <select id="pf-tool">
+          <option value="opencode">opencode</option>
+          <option value="pi">pi</option>
+        </select></label>
+        <label>ID（英文标识，如 my-gateway）<input id="pf-id" type="text" placeholder="my-gateway" /></label>
+        <label>显示名（可选）<input id="pf-name" type="text" placeholder="我的网关" /></label>
+        <label>BaseURL（到 /v1 为止）<input id="pf-baseurl" type="text" placeholder="https://api.example.com/v1" /></label>
+        <p class="hint" id="pf-baseurl-hint" style="display:none"></p>
+        <label>API Key <span class="hint" id="pf-key-hint"></span><input id="pf-key" type="text" placeholder="sk-...（留空表示不修改）" /></label>
+        <label>接口类型
+          <select id="pf-style">
+            <option value="openai-completions">OpenAI 兼容（/chat/completions）</option>
+            <option value="anthropic-messages">Anthropic 兼容（/messages）</option>
+          </select>
+        </label>
+        <p class="hint" id="pf-key-hint-pi" style="display:none">pi 的 key 支持 env:变量名 写法（写入为 $变量名 引用）</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-provider-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新增模型 -->
+  <div class="modal-overlay hidden" id="modal-add-models">
+    <div class="modal">
+      <h2>新增模型</h2>
+      <p class="hint" id="add-models-target"></p>
+      <div class="form">
+        <label>模型列表（每行一个，可用「id|显示名」格式）<textarea id="add-models-input" rows="7"
+          placeholder="glm-4.7|GLM 4.7&#10;deepseek-v4"></textarea></label>
+        <p class="hint">也可以点「拉取远端模型」从网关同步全部可用模型</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-add-models-save">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 远端同步 diff -->
+  <div class="modal-overlay hidden" id="modal-sync">
+    <div class="modal wide">
+      <h2>远端模型同步 <span class="sub" id="sync-provider-label"></span></h2>
+      <div class="modal-toolbar">
+        <input id="sync-filter" type="search" class="search-input" placeholder="🔍 模糊搜索模型 ID（同时过滤下面两个列表）" />
+      </div>
+      <div id="sync-body" class="sync-body"><p class="hint">正在拉取远端模型列表…</p></div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-sync-apply" style="display:none">应用所选变更</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 跨工具同步（opencode ⇄ pi） -->
+  <div class="modal-overlay hidden" id="modal-cross-sync">
+    <div class="modal wide">
+      <h2>跨工具同步 <span class="sub">opencode ⇄ pi</span></h2>
+      <div class="form">
+        <label>同步方向
+          <select id="cs-direction">
+            <option value="pi->opencode">pi → opencode（把 pi 的 LLM API 同步到 opencode）</option>
+            <option value="opencode->pi">opencode → pi（把 opencode 的 LLM API 同步到 pi）</option>
+          </select>
+        </label>
+        <p class="hint" id="cs-hint">
+          规则：目标端已存在的同 ID Provider 会被「覆盖更新」（BaseURL / 接口类型 / 模型以源端为准），
+          不存在的会新建；API Key 智能转换（pi 的 $ENV 引用 ⇄ opencode 的 {env:VAR} 引用，其余写明文）。
+          每次写入前自动备份目标配置文件。
+        </p>
+        <label>搜索 Provider <input id="cs-filter" type="search" class="search-input" placeholder="🔍 模糊搜索 ID / 名称" /></label>
+      </div>
+      <div id="cs-body" class="sync-body"><p class="hint">请先选择同步方向</p></div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn" id="btn-cs-plan">预检差异</button>
+        <button class="btn primary" id="btn-cs-apply" style="display:none">执行同步</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 桥接面板 -->
+  <div class="modal-overlay hidden" id="modal-bridge">
+    <div class="modal">
+      <h2>🌉 本地 QUIC 桥接</h2>
+      <p class="hint" style="margin-bottom:10px">
+        被墙的 API（TCP 握手被重置、HTTP/3 可用）经本机 127.0.0.1 用 QUIC 转发；
+        Provider 的 BaseURL 指向桥接地址即可正常访问（点 Provider 卡片上的「🌉 走桥接」自动改写，随时可取消）。
+      </p>
+      <div id="bridge-body"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>关闭</button>
+        <button class="btn primary" id="btn-bridge-power">启动桥接</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 即时问答 -->
+  <div class="modal-overlay hidden" id="modal-chat" data-persist>
+    <div class="modal chat">
+      <div class="chat-head">
+        <h2>即时问答 <span class="sub" id="chat-model-label"></span></h2>
+        <button class="chat-close" data-close title="关闭">×</button>
+      </div>
+      <div id="chat-log" class="chat-log"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" rows="3" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
+        <div class="chat-btns">
+          <button class="btn primary" id="btn-chat-send" disabled>发送</button>
+          <button class="btn ghost" id="btn-chat-clear">清空会话</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 回到顶部 -->
+  <button id="btn-back-top" class="back-top" title="回到顶部">↑</button>
+
+  <div id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>
