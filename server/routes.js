@@ -112,7 +112,8 @@ router.post('/providers/delete', async (req, res, next) => {
   try {
     const { tool, id } = req.body || {};
     await getStore(tool).deleteProvider(id);
-    res.json({ ok: true });
+    const defaultCleared = clearDefaultIfReferenced(tool, id, null);
+    res.json({ ok: true, defaultCleared });
   } catch (e) {
     next(e);
   }
@@ -135,7 +136,61 @@ router.post('/models/delete', async (req, res, next) => {
     const { tool, providerId, modelIds } = req.body || {};
     if (!Array.isArray(modelIds) || !modelIds.length) throw new Error('modelIds 不能为空');
     const removed = await getStore(tool).deleteModels(providerId, modelIds);
-    res.json({ ok: true, removed });
+    const defaultCleared = clearDefaultIfReferenced(tool, providerId, removed);
+    res.json({ ok: true, removed, defaultCleared });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// ---------- 默认模型（新会话不再手动选模型） ----------
+// opencode：配置顶层 "model": "provider/model"；pi：settings.json 的 defaultProvider/defaultModel
+const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+// 删除 provider / 模型后调用：默认模型引用了被删对象就一并清除，避免留下失效配置
+function clearDefaultIfReferenced(tool, providerId, modelIds) {
+  const def = getStore(tool).read().defaultModel;
+  if (!def || def.provider !== providerId) return false;
+  if (Array.isArray(modelIds) && !modelIds.includes(def.model)) return false;
+  getStore(tool).clearDefaultModel();
+  return true;
+}
+
+// body { tool, providerId, modelId, thinkingLevel? }
+// providerId/modelId 任一为空 → 清除该工具的默认模型；thinkingLevel 仅 pi 支持
+router.post('/default-model', async (req, res, next) => {
+  try {
+    const { tool } = req.body || {};
+    const store = getStore(tool);
+    const providerId = String(req.body?.providerId || '').trim();
+    const modelId = String(req.body?.modelId || '').trim();
+
+    if (!providerId || !modelId) {
+      const def = await store.clearDefaultModel();
+      return res.json({ ok: true, default: def, cleared: true });
+    }
+
+    const prov = store.read().providers.find((x) => x.id === providerId);
+    if (!prov) throw new Error(`${tool} 中不存在 provider: ${providerId}`);
+    if (!prov.models.some((m) => m.id === modelId)) {
+      throw new Error(`${tool}/${providerId} 中不存在模型: ${modelId}`);
+    }
+    if (prov.apiKeySource === 'none') {
+      throw new Error(
+        `该 provider 未配置 API Key，设置了默认模型也不会生效（工具要求有可用 key），请先在「编辑」里配置 key`
+      );
+    }
+
+    let thinkingLevel;
+    if (tool === 'pi' && req.body.thinkingLevel !== undefined) {
+      const tl = req.body.thinkingLevel;
+      if (tl !== null && tl !== '' && !PI_THINKING_LEVELS.includes(tl)) {
+        throw new Error(`thinkingLevel 不合法（可选：${PI_THINKING_LEVELS.join(' / ')}）`);
+      }
+      thinkingLevel = tl;
+    }
+    const def = await store.setDefaultModel(providerId, modelId, thinkingLevel);
+    res.json({ ok: true, default: def });
   } catch (e) {
     next(e);
   }

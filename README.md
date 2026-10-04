@@ -28,6 +28,7 @@ npm start        # http://127.0.0.1:3210 （--no-open 不自动开浏览器，PO
 | 功能 | 说明 |
 |---|---|
 | 配置总览 | 读取两个工具的全部 provider / 模型，展示 key 来源与打码 |
+| 默认模型 | 一键把某个模型设为该工具新会话的默认模型（opencode 写配置顶层 `model`，pi 写 `settings.json` 的 `defaultProvider/defaultModel`），顶栏「⭐ 默认模型」可集中查看与修改；删除该 provider/模型时自动清除默认 |
 | 拉取远端模型 | 调用网关 `GET /models`，diff 出「远端新增」「远端未列出（疑似下线）」，勾选后一键同步 |
 | 一键测试（API） | 直接向网关发一次小对话请求，得到成功/失败与延迟，可全量并发跑 |
 | 一键测试（CLI） | 用 `opencode run -m provider/model` / `pi -p --provider --model` 真实跑一次端到端对话 |
@@ -37,7 +38,8 @@ npm start        # http://127.0.0.1:3210 （--no-open 不自动开浏览器，PO
 ## 修改的配置文件
 
 - opencode：`~/.config/opencode/opencode.jsonc`
-- pi：`~/.pi/agent/models.json`（key 支持 `env:变量名` 写法，写入为 `$变量名`；也兼容 `auth.json` 里的 key）
+- pi：`~/.pi/agent/models.json`（key 支持 `env:变量名` 写法，写入为 `$变量名` 引用；也兼容 `auth.json` 里的 key）
+- 默认模型额外写：opencode 同文件顶层 `model` 字段；pi 另写 `~/.pi/agent/settings.json`（`defaultProvider` / `defaultModel` / 可选 `defaultThinkingLevel`）
 
 每次保存前，原配置会备份到同目录 `ammp-backups/`（保留最近 20 份）。
 

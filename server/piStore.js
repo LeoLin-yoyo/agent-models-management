@@ -1,6 +1,7 @@
 // pi 配置存储：~/.pi/agent/models.json（key 可为 $ENV 引用，实际 key 也可能存在 auth.json）
+// 默认模型存 ~/.pi/agent/settings.json 的 defaultProvider / defaultModel（可选 defaultThinkingLevel）
 const fs = require('fs');
-const { CONFIG_PATHS, backupConfig, withLock } = require('./paths');
+const { CONFIG_PATHS, backupConfig, withLock, readJsonNoBom } = require('./paths');
 const { maskKey } = require('./mask');
 
 function loadRaw() {
@@ -19,6 +20,51 @@ function loadAuth() {
   } catch {
     return {};
   }
+}
+
+// settings.json 可能不存在或带 BOM，读不到就当 {}
+function loadSettings() {
+  try {
+    return readJsonNoBom(CONFIG_PATHS.piSettings);
+  } catch {
+    return {};
+  }
+}
+
+function saveSettings(settings) {
+  backupConfig(CONFIG_PATHS.piSettings);
+  fs.writeFileSync(CONFIG_PATHS.piSettings, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
+
+// 默认模型：settings.json 的 defaultProvider + defaultModel 组成 provider/model
+function readDefaultModel() {
+  const s = loadSettings();
+  if (!s.defaultProvider || !s.defaultModel) return null;
+  return { provider: s.defaultProvider, model: s.defaultModel, thinkingLevel: s.defaultThinkingLevel || null };
+}
+
+// 设默认模型；thinkingLevel 传 null 时删除该键，undefined 时不改动，其余值写入
+function setDefaultModel(providerId, modelId, thinkingLevel) {
+  return withLock('pi-settings', () => {
+    const s = loadSettings();
+    s.defaultProvider = providerId;
+    s.defaultModel = modelId;
+    if (thinkingLevel === null) delete s.defaultThinkingLevel;
+    else if (thinkingLevel != null && thinkingLevel !== '') s.defaultThinkingLevel = thinkingLevel;
+    saveSettings(s);
+    return readDefaultModel();
+  });
+}
+
+function clearDefaultModel() {
+  return withLock('pi-settings', () => {
+    const s = loadSettings();
+    delete s.defaultProvider;
+    delete s.defaultModel;
+    delete s.defaultThinkingLevel;
+    saveSettings(s);
+    return null;
+  });
 }
 
 function apiKeySourceOf(p, id) {
@@ -52,7 +98,12 @@ function normalize(doc) {
 
 function read() {
   const { doc } = loadRaw();
-  return { tool: 'pi', configPath: CONFIG_PATHS.pi, providers: normalize(doc) };
+  return {
+    tool: 'pi',
+    configPath: CONFIG_PATHS.pi,
+    providers: normalize(doc),
+    defaultModel: readDefaultModel(),
+  };
 }
 
 function getProviderDoc(doc, id) {
@@ -207,4 +258,6 @@ module.exports = {
   deleteModels,
   resolveKey,
   upsertProvider,
+  setDefaultModel,
+  clearDefaultModel,
 };

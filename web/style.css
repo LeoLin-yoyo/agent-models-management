@@ -400,3 +400,14 @@ table.models tr:hover td { background: rgba(255,255,255,.02); }
   font-size: 14px;
   line-height: 2;
 }
+
+/* ---------- 默认模型 ---------- */
+.tag.default { color: var(--orange); border-color: rgba(224,160,60,.55); background: rgba(224,160,60,.08); margin-right: 6px; }
+.btn.star { color: var(--orange); }
+.dm-tool { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px 16px; margin-bottom: 12px; background: var(--bg); }
+.dm-tool h3 { font-size: 14px; margin-bottom: 12px; display: flex; align-items: baseline; gap: 10px; }
+.dm-tool h3 .dm-current { font-size: 12px; color: var(--text-dim); font-weight: 400; }
+.dm-tool .form label { display: flex; align-items: center; gap: 8px; }
+.dm-tool .form .k { color: var(--text-dim); width: 64px; flex-shrink: 0; }
+.dm-tool .form select { flex: 1; }
+.dm-actions { justify-content: flex-start; margin-top: 2px; }

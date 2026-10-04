@@ -91,7 +91,132 @@ function render() {
   renderSidebar();
   renderContent();
   renderBridgeChip();
+  renderDefaultBtnTitle();
   updateBackTop();
+}
+
+// ---------- 默认模型 ----------
+// overview[tool].defaultModel = { provider, model, thinkingLevel? } | null
+function defaultModelStatus(tool) {
+  const def = overview?.[tool]?.defaultModel;
+  return def ? `${def.provider}/${def.model}` : '未设置';
+}
+
+function renderDefaultBtnTitle() {
+  const btn = $('#btn-default-model');
+  if (!btn) return;
+  btn.title =
+    '设置新会话默认使用的模型（当前）\n' +
+    `opencode: ${defaultModelStatus('opencode')}\n` +
+    `pi: ${defaultModelStatus('pi')}`;
+}
+
+async function setDefaultModel(tool, prov, m) {
+  try {
+    await api('/api/default-model', { tool, providerId: prov.id, modelId: m.id });
+    toast(`已设为 ${tool} 新会话默认模型：${prov.id}/${m.id}`, 'success');
+    await refresh();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function clearDefaultModel(tool) {
+  try {
+    await api('/api/default-model', { tool, providerId: '', modelId: '' });
+    toast(`已清除 ${tool} 的默认模型`, 'success');
+    await refresh();
+    if ($('#modal-default-model') && !$('#modal-default-model').classList.contains('hidden')) renderDefaultModal();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+let dmState = null; // 默认模型弹窗暂存：{ opencode:{providerId,modelId}, pi:{providerId,modelId,thinkingLevel} }
+
+function openDefaultModal() {
+  dmState = {};
+  for (const tool of ['opencode', 'pi']) {
+    const def = overview?.[tool]?.defaultModel;
+    dmState[tool] = {
+      providerId: def?.provider || '',
+      modelId: def?.model || '',
+      thinkingLevel: def?.thinkingLevel || '',
+    };
+  }
+  renderDefaultModal();
+  showModal('#modal-default-model');
+}
+
+function renderDefaultModal() {
+  if (!dmState) return;
+  const body = $('#dm-body');
+  body.textContent = '';
+  for (const tool of ['opencode', 'pi']) {
+    const st = dmState[tool];
+    const providers = overview?.[tool]?.providers || [];
+    // provider 变了或已不存在时，模型选择随之失效
+    const models = (providers.find((p) => p.id === st.providerId) || { models: [] }).models;
+    if (st.modelId && !models.some((m) => m.id === st.modelId)) st.modelId = '';
+
+    const providerSel = el(
+      'select',
+      { onchange: (e) => { st.providerId = e.target.value; st.modelId = ''; renderDefaultModal(); } },
+      el('option', { value: '' }, providers.length ? '（选择 Provider）' : '（暂无 Provider）'),
+      providers.map((p) => el('option', { value: p.id }, p.name === p.id ? p.id : `${p.name}（${p.id}）`))
+    );
+    providerSel.value = st.providerId;
+    const modelSel = el(
+      'select',
+      { onchange: (e) => { st.modelId = e.target.value; } },
+      el('option', { value: '' }, '（选择模型）'),
+      models.map((m) => el('option', { value: m.id }, m.name === m.id ? m.id : `${m.name}（${m.id}）`))
+    );
+    modelSel.value = st.modelId;
+
+    const form = el('div', { class: 'form' },
+      el('label', {}, el('span', { class: 'k' }, 'Provider'), providerSel),
+      el('label', {}, el('span', { class: 'k' }, '模型'), modelSel),
+    );
+    if (tool === 'pi') {
+      const thinkSel = el(
+        'select',
+        { onchange: (e) => { st.thinkingLevel = e.target.value; } },
+        el('option', { value: '' }, '（不设置，跟随工具默认 medium）'),
+        ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((l) => el('option', { value: l }, l))
+      );
+      thinkSel.value = st.thinkingLevel;
+      form.append(el('label', {}, el('span', { class: 'k' }, '思考等级'), thinkSel));
+    }
+
+    const saveBtn = el('button', { class: 'btn primary', onclick: () => saveDefaultTool(tool) }, '保存');
+    saveBtn.disabled = !st.modelId;
+    const clearBtn = el('button', { class: 'btn danger', onclick: () => clearDefaultModel(tool) }, '清除默认');
+    clearBtn.disabled = !overview?.[tool]?.defaultModel;
+
+    body.append(
+      el('div', { class: 'dm-tool' },
+        el('h3', {}, tool, el('span', { class: 'dm-current' }, `当前：${defaultModelStatus(tool)}`)),
+        form,
+        el('div', { class: 'modal-actions dm-actions' }, saveBtn, clearBtn),
+      )
+    );
+  }
+}
+
+async function saveDefaultTool(tool) {
+  const st = dmState?.[tool];
+  if (!st || !st.modelId) return;
+  const body = { tool, providerId: st.providerId, modelId: st.modelId };
+  if (tool === 'pi') body.thinkingLevel = st.thinkingLevel || null; // 空串 → 清除已存思考等级
+  try {
+    await api('/api/default-model', body);
+    toast(`已设为 ${tool} 新会话默认模型：${st.providerId}/${st.modelId}`, 'success');
+    await refresh();
+    renderDefaultModal();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 // ---------- 回到顶部 ----------
@@ -271,16 +396,23 @@ function renderContent() {
     return;
   }
   const tbody = el('tbody');
+  const defModel = overview?.[selected.tool]?.defaultModel;
   for (const m of hitModels) {
     const key = `${selected.tool}/${prov.id}/${m.id}`;
+    const isDefault = !!(defModel && defModel.provider === prov.id && defModel.model === m.id);
     tbody.append(
       el('tr', { 'data-key': key },
         el('td', {}, testBadge(selected.tool, prov.id, m)),
-        el('td', { class: 'mid' }, m.id),
+        el('td', { class: 'mid' },
+          isDefault ? el('span', { class: 'tag default', title: '新会话默认模型（点操作列「取消默认」可移除）' }, '⭐ 默认') : null,
+          ` ${m.id}`),
         el('td', { class: 'mname' }, m.name),
         el('td', { class: 'mname' }, m.test ? fmtRel(m.test.checkedAt) : '—'),
         el('td', {},
           el('div', { class: 'row-actions' },
+            isDefault
+              ? el('button', { class: 'btn small star', title: '点击取消该工具的默认模型', onclick: () => clearDefaultModel(selected.tool) }, '★ 取消默认')
+              : el('button', { class: 'btn small', title: '设为该工具新会话的默认模型', onclick: () => setDefaultModel(selected.tool, prov, m) }, '☆ 设为默认'),
             el('button', { class: 'btn small', title: '用该模型进行多轮对话', onclick: () => openChatModal(selected.tool, prov.id, m.id) }, '💬 即时问答'),
             el('button', { class: 'btn small', onclick: () => runTest(selected.tool, prov.id, m.id, 'api') }, 'API 测试'),
             el('button', { class: 'btn small', onclick: () => runTest(selected.tool, prov.id, m.id, 'cli') }, 'CLI 测试'),
@@ -297,7 +429,7 @@ function renderContent() {
           el('th', {}, '模型 ID'),
           el('th', {}, '显示名'),
           el('th', { style: 'width:110px' }, '上次测试'),
-          el('th', { style: 'width:260px' }, '操作'))),
+          el('th', { style: 'width:330px' }, '操作'))),
       tbody)
   );
 }
@@ -404,7 +536,8 @@ async function saveProvider() {
 async function deleteProvider(prov) {
   if (!confirm(`确定删除 provider「${prov.name}」（${selected.tool}/${prov.id}）？\n删除前会自动备份配置文件。`)) return;
   try {
-    await api('/api/providers/delete', { tool: selected.tool, id: prov.id });
+    const r = await api('/api/providers/delete', { tool: selected.tool, id: prov.id });
+    if (r.defaultCleared) toast(`它是 ${selected.tool} 的默认模型来源，默认设置已一并清除`, 'success');
     toast(`已删除 ${selected.tool}/${prov.id}`, 'success');
     await refresh();
   } catch (e) {
@@ -441,7 +574,8 @@ async function saveAddModels() {
 async function deleteModel(prov, m) {
   if (!confirm(`确定从 ${selected.tool}/${prov.id} 删除模型「${m.id}」？`)) return;
   try {
-    await api('/api/models/delete', { tool: selected.tool, providerId: prov.id, modelIds: [m.id] });
+    const r = await api('/api/models/delete', { tool: selected.tool, providerId: prov.id, modelIds: [m.id] });
+    if (r.defaultCleared) toast(`它是 ${selected.tool} 的默认模型，默认设置已一并清除`, 'success');
     toast(`已删除 ${m.id}`, 'success');
     await refresh();
   } catch (e) {
@@ -913,6 +1047,7 @@ $('#btn-provider-save').addEventListener('click', saveProvider);
 $('#btn-add-models-save').addEventListener('click', saveAddModels);
 $('#btn-sync-apply').addEventListener('click', applySync);
 $('#btn-cross-sync').addEventListener('click', openCrossSyncModal);
+$('#btn-default-model').addEventListener('click', openDefaultModal);
 $('#bridge-chip').addEventListener('click', openBridgeModal);
 $('#btn-bridge-power').addEventListener('click', bridgePower);
 $('#btn-cs-plan').addEventListener('click', () => loadCsPlan().catch((e) => toast(e.message, 'error')));

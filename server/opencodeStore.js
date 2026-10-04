@@ -53,9 +53,40 @@ function normalize(doc) {
   });
 }
 
+// 顶层 "model": "provider/model" 即新会话默认模型；provider id 不含斜杠，按第一个 / 切分
+function readDefaultModel(doc) {
+  const v = typeof doc.model === 'string' ? doc.model.trim() : '';
+  const i = v.indexOf('/');
+  if (!v || i <= 0 || i === v.length - 1) return null;
+  return { provider: v.slice(0, i), model: v.slice(i + 1) };
+}
+
+function setDefaultModel(providerId, modelId) {
+  return withLock('opencode', () => {
+    const { doc } = loadRaw();
+    doc.model = `${providerId}/${modelId}`;
+    saveDoc(doc);
+    return readDefaultModel(doc);
+  });
+}
+
+function clearDefaultModel() {
+  return withLock('opencode', () => {
+    const { doc } = loadRaw();
+    delete doc.model;
+    saveDoc(doc);
+    return null;
+  });
+}
+
 function read() {
   const { doc } = loadRaw();
-  return { tool: 'opencode', configPath: CONFIG_PATHS.opencode, providers: normalize(doc) };
+  return {
+    tool: 'opencode',
+    configPath: CONFIG_PATHS.opencode,
+    providers: normalize(doc),
+    defaultModel: readDefaultModel(doc),
+  };
 }
 
 function getProviderDoc(doc, id) {
@@ -205,4 +236,6 @@ module.exports = {
   deleteModels,
   resolveKey,
   upsertProvider,
+  setDefaultModel,
+  clearDefaultModel,
 };

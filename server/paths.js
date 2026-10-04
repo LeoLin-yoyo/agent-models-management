@@ -10,6 +10,8 @@ const CONFIG_PATHS = {
   ]),
   pi: path.join(os.homedir(), '.pi', 'agent', 'models.json'),
   piAuth: path.join(os.homedir(), '.pi', 'agent', 'auth.json'),
+  // pi 的全局设置（默认模型 defaultProvider/defaultModel/defaultThinkingLevel 存这里）
+  piSettings: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
   // opencode 的凭据文件（/connect 写入），实测带 UTF-8 BOM
   ocAuth: path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
 };

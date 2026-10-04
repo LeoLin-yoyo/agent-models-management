@@ -16,6 +16,7 @@
     <div class="header-actions">
       <button id="btn-test-all" class="btn">⚡ 一键测试全部</button>
       <button id="btn-cross-sync" class="btn" title="在 opencode 与 pi 之间同步 LLM API（Provider）">⇄ 跨工具同步</button>
+      <button id="btn-default-model" class="btn" title="设置新会话默认使用的模型">⭐ 默认模型</button>
       <button id="btn-add-provider" class="btn primary">＋ 新增 Provider</button>
       <button id="btn-refresh" class="btn ghost" title="重新读取配置文件">刷新</button>
     </div>
@@ -126,6 +127,17 @@
       <div class="modal-actions">
         <button class="btn ghost" data-close>关闭</button>
         <button class="btn primary" id="btn-bridge-power">启动桥接</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 默认模型设置（opencode 顶层 model / pi settings.json 的 defaultProvider+defaultModel） -->
+  <div class="modal-overlay hidden" id="modal-default-model">
+    <div class="modal">
+      <h2>⭐ 默认模型 <span class="sub">pi / opencode 新会话自动使用，不用再手动选</span></h2>
+      <div id="dm-body"></div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>关闭</button>
       </div>
     </div>
   </div>
