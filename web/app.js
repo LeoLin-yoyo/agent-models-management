@@ -161,14 +161,21 @@ function renderDefaultModal() {
 
     const providerSel = el(
       'select',
-      { onchange: (e) => { st.providerId = e.target.value; st.modelId = ''; renderDefaultModal(); } },
+      { onchange: (e) => {
+          st.providerId = e.target.value;
+          // 单模型 provider 直接预选，省一次点击；否则清空待选
+          const ms = (providers.find((p) => p.id === st.providerId) || { models: [] }).models;
+          st.modelId = ms.length === 1 ? ms[0].id : '';
+          renderDefaultModal();
+        } },
       el('option', { value: '' }, providers.length ? '（选择 Provider）' : '（暂无 Provider）'),
       providers.map((p) => el('option', { value: p.id }, p.name === p.id ? p.id : `${p.name}（${p.id}）`))
     );
     providerSel.value = st.providerId;
     const modelSel = el(
       'select',
-      { onchange: (e) => { st.modelId = e.target.value; } },
+      // 重渲染以刷新保存按钮的可用状态（disabled 在渲染时计算）
+      { onchange: (e) => { st.modelId = e.target.value; renderDefaultModal(); } },
       el('option', { value: '' }, '（选择模型）'),
       models.map((m) => el('option', { value: m.id }, m.name === m.id ? m.id : `${m.name}（${m.id}）`))
     );
