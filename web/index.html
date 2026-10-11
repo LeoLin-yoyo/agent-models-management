@@ -10,24 +10,41 @@
   <header>
     <div class="brand">
       <h1>Agent 模型管理</h1>
-      <span class="sub">opencode · pi</span>
-      <span id="bridge-chip" class="chip unknown" title="本地 QUIC 桥接（被墙的 API 由此转发）">🌉 桥接 …</span>
+      <nav class="tabs">
+        <button id="tab-agent" class="tab active" title="opencode / pi 的 Provider 与模型配置">🗂 模型配置</button>
+        <button id="tab-bridge" class="tab" title="被墙 API 的本地 QUIC 桥接：配置桥接模型并同步给 agent">🌉 桥接管理</button>
+      </nav>
+      <span id="bridge-chip" class="chip unknown" title="本地 QUIC 桥接运行状态">🌉 桥接 …</span>
     </div>
     <div class="header-actions">
-      <button id="btn-test-all" class="btn">⚡ 一键测试全部</button>
-      <button id="btn-cross-sync" class="btn" title="在 opencode 与 pi 之间同步 LLM API（Provider）">⇄ 跨工具同步</button>
-      <button id="btn-default-model" class="btn" title="设置新会话默认使用的模型">⭐ 默认模型</button>
-      <button id="btn-add-provider" class="btn primary">＋ 新增 Provider</button>
-      <button id="btn-refresh" class="btn ghost" title="重新读取配置文件">刷新</button>
+      <div id="agent-actions" class="actions-group">
+        <button id="btn-test-all" class="btn">⚡ 一键测试全部</button>
+        <button id="btn-cross-sync" class="btn" title="在 opencode 与 pi 之间同步 LLM API（Provider）">⇄ 跨工具同步</button>
+        <button id="btn-default-model" class="btn" title="设置新会话默认使用的模型">⭐ 默认模型</button>
+        <button id="btn-add-provider" class="btn primary">＋ 新增 Provider</button>
+        <button id="btn-refresh" class="btn ghost" title="重新读取配置文件">刷新</button>
+      </div>
+      <div id="bridge-actions" class="actions-group hidden">
+        <button id="btn-bridge-add" class="btn primary" title="新增一个需要走本地桥接的 API 配置">＋ 新增桥接模型</button>
+        <button id="btn-bridge-refresh" class="btn ghost" title="重新读取桥接配置">刷新</button>
+      </div>
     </div>
   </header>
 
   <main>
-    <aside id="sidebar"></aside>
-    <section id="content"></section>
+    <!-- 视图一：模型配置（opencode / pi） -->
+    <div id="view-agent" class="view">
+      <aside id="sidebar"></aside>
+      <section id="content"></section>
+    </div>
+    <!-- 视图二：桥接管理（独立模块，不与 agent 配置混在一起） -->
+    <div id="view-bridge" class="view hidden">
+      <aside id="bridge-sidebar"></aside>
+      <section id="bridge-content"></section>
+    </div>
   </main>
 
-  <!-- 新增/编辑 Provider -->
+  <!-- 新增/编辑 Provider（模型配置视图） -->
   <div class="modal-overlay hidden" id="modal-provider">
     <div class="modal">
       <h2 id="provider-modal-title">新增 Provider</h2>
@@ -56,7 +73,7 @@
     </div>
   </div>
 
-  <!-- 新增模型 -->
+  <!-- 新增模型（模型配置视图） -->
   <div class="modal-overlay hidden" id="modal-add-models">
     <div class="modal">
       <h2>新增模型</h2>
@@ -73,7 +90,7 @@
     </div>
   </div>
 
-  <!-- 远端同步 diff -->
+  <!-- 远端同步 diff（模型配置视图） -->
   <div class="modal-overlay hidden" id="modal-sync">
     <div class="modal wide">
       <h2>远端模型同步 <span class="sub" id="sync-provider-label"></span></h2>
@@ -115,22 +132,6 @@
     </div>
   </div>
 
-  <!-- 桥接面板 -->
-  <div class="modal-overlay hidden" id="modal-bridge">
-    <div class="modal">
-      <h2>🌉 本地 QUIC 桥接</h2>
-      <p class="hint" style="margin-bottom:10px">
-        被墙的 API（TCP 握手被重置、HTTP/3 可用）经本机 127.0.0.1 用 QUIC 转发；
-        Provider 的 BaseURL 指向桥接地址即可正常访问（点 Provider 卡片上的「🌉 走桥接」自动改写，随时可取消）。
-      </p>
-      <div id="bridge-body"></div>
-      <div class="modal-actions">
-        <button class="btn ghost" data-close>关闭</button>
-        <button class="btn primary" id="btn-bridge-power">启动桥接</button>
-      </div>
-    </div>
-  </div>
-
   <!-- 默认模型设置（opencode 顶层 model / pi settings.json 的 defaultProvider+defaultModel） -->
   <div class="modal-overlay hidden" id="modal-default-model">
     <div class="modal">
@@ -160,10 +161,66 @@
     </div>
   </div>
 
+  <!-- 桥接管理：新增/编辑桥接模型 -->
+  <div class="modal-overlay hidden" id="modal-bridge-provider">
+    <div class="modal">
+      <h2 id="bp-modal-title">新增桥接模型</h2>
+      <div class="form">
+        <label>ID（英文标识；用作桥接路由与同步副本的 provider id，创建后不可修改）<input id="bp-id" type="text" placeholder="my-gateway" /></label>
+        <label>显示名（可选）<input id="bp-name" type="text" placeholder="我的网关" /></label>
+        <label>上游地址 BaseURL（被墙的原始地址，到 /v1 为止）<input id="bp-upstream" type="text" placeholder="https://api.example.com/v1" /></label>
+        <label>API Key（支持 env:变量名 引用；本机环境变量里取值）<input id="bp-key" type="text" placeholder="sk-... 或 env:MY_KEY（留空表示不修改）" /></label>
+        <label>接口类型
+          <select id="bp-style">
+            <option value="openai-completions">OpenAI 兼容（/chat/completions）</option>
+            <option value="anthropic-messages">Anthropic 兼容（/messages）</option>
+          </select>
+        </label>
+        <p class="hint" id="bp-hint"></p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-bp-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 桥接管理：新增模型 -->
+  <div class="modal-overlay hidden" id="modal-bridge-add-models">
+    <div class="modal">
+      <h2>新增模型（桥接模型）</h2>
+      <p class="hint" id="bam-target"></p>
+      <div class="form">
+        <label>模型列表（每行一个，可用「id|显示名」格式）<textarea id="bam-input" rows="7"
+          placeholder="glm-4.7|GLM 4.7&#10;deepseek-v4"></textarea></label>
+        <p class="hint">也可以点「拉取远端模型」从网关（经桥接）同步全部可用模型；已同步的工具会自动重新同步</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-bam-save">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 桥接管理：远端同步 diff（经桥接拉取） -->
+  <div class="modal-overlay hidden" id="modal-bridge-sync">
+    <div class="modal wide">
+      <h2>远端模型同步 <span class="sub" id="bsync-label"></span> <span class="sub">（经本地桥接拉取）</span></h2>
+      <div class="modal-toolbar">
+        <input id="bsync-filter" type="search" class="search-input" placeholder="🔍 模糊搜索模型 ID（同时过滤下面两个列表）" />
+      </div>
+      <div id="bsync-body" class="sync-body"><p class="hint">正在经桥接拉取远端模型列表…</p></div>
+      <div class="modal-actions">
+        <button class="btn ghost" data-close>取消</button>
+        <button class="btn primary" id="btn-bsync-apply" style="display:none">应用所选变更</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 回到顶部 -->
   <button id="btn-back-top" class="back-top" title="回到顶部">↑</button>
 
   <div id="toasts"></div>
-  <script src="app.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

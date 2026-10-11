@@ -15,9 +15,12 @@ function nodeDir() {
 }
 
 function resolveOpencode() {
+  // 优先环境变量；其余按 npm 全局目录下的已知布局依次探测（旧路径 opencode-ai/bin 已失效）
   const candidates = [
     process.env.AMMP_OPENCODE_PATH,
+    path.join(nodeDir(), 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe'),
     path.join(nodeDir(), 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'),
+    path.join(nodeDir(), 'opencode.exe'),
   ].filter(Boolean);
   for (const c of candidates) if (fs.existsSync(c)) return c;
   return null;

@@ -74,7 +74,7 @@ class _H3Client(QuicConnectionProtocol):
             self.events.put_nowait(ev)
 
 
-async def _forward(host, port, method, path, header_items, body, api_key,
+async def _forward(host, port, method, path, header_items, body, api_key, auth_style,
                    on_headers, on_data):
     cfg = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN,
                             idle_timeout=STREAM_IDLE_TIMEOUT)
@@ -92,16 +92,27 @@ async def _forward(host, port, method, path, header_items, body, api_key,
             (b":authority", host.encode()),
             (b":path", path.encode()),
         ]
-        have_auth = False
+        # 鉴权策略：路由里配了 key 就以它为准（客户端传什么都忽略——避免误填的 key 把请求打挂）；
+        # 路由没配 key 时才透传客户端的鉴权头。
+        strip_client_auth = bool(api_key)
         for k, v in header_items:
             lk = k.lower()
             if lk in HOP_BY_HOP or lk.startswith(":"):
                 continue
-            if lk == "authorization":
-                have_auth = True
+            if lk in ("authorization", "x-api-key"):
+                if strip_client_auth:
+                    continue  # 路由 key 优先，丢弃客户端鉴权头
+                vv = (v or "").strip()
+                if not vv or vv.lower() in ("bearer", "bearer null", "null"):
+                    continue  # 空/占位鉴权头不转发
             hdrs.append((lk.encode(), v.encode()))
-        if not have_auth and api_key:
-            hdrs.append((b"authorization", b"Bearer " + api_key.encode()))
+        # 用路由配置的 key 注入鉴权（在桥接里配一次，客户端无需再配、也不会覆盖）
+        if api_key:
+            if auth_style == "x-api-key":
+                hdrs.append((b"x-api-key", api_key.encode()))
+                hdrs.append((b"anthropic-version", b"2023-06-01"))
+            else:
+                hdrs.append((b"authorization", b"Bearer " + api_key.encode()))
         if body:
             hdrs.append((b"content-length", str(len(body)).encode()))
 
@@ -124,7 +135,9 @@ async def _forward(host, port, method, path, header_items, body, api_key,
                     for k, v in ev.headers:
                         if k == b":status":
                             st = int(v)
-                        elif k.lower() not in HOP_BY_HOP:
+                        # H3 的头名是 bytes；必须先 decode 再比对，否则 HOP_BY_HOP 过滤不生效，
+                        # 上游的 content-length/transfer-encoding 会和本服务补的 chunked 打架
+                        elif k.decode("latin-1").lower() not in HOP_BY_HOP:
                             hs.append((k.decode("utf-8", "replace"),
                                        v.decode("utf-8", "replace")))
                     if 100 <= st < 200:
@@ -215,13 +228,33 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
         up = urllib.parse.urlsplit(route["upstream"])
         host = up.hostname
         port = up.port or 443
-        target_path = (up.path.rstrip("/") + rest) or "/"
+        # 上游基础路径（如 /v1）：upstream 自身带就用它，否则取 originalBaseUrl 的路径。
+        # 客户端 BaseURL 可能写到 /v1 为止，也可能只写到 /<routeId>：后者要自动补上基础路径，
+        # 否则会把 /chat/completions 直接打到上游根路径而 404。
+        base_path = up.path.rstrip("/")
+        if not base_path:
+            orig = route.get("originalBaseUrl")
+            if isinstance(orig, str) and orig:
+                try:
+                    base_path = urllib.parse.urlsplit(orig).path.rstrip("/")
+                except Exception:
+                    base_path = ""
+        if base_path and not (rest == base_path or rest.startswith(base_path + "/")):
+            target_path = base_path + rest
+        else:
+            target_path = rest
         if not target_path.startswith("/"):
             target_path = "/" + target_path
 
         header_items = list(self.headers.items())
         body = self._read_body()
         state = {"headers_sent": False}
+
+        # 路由配置的鉴权：明文 apiKey，或 apiKeyEnv（运行时从环境变量取值，避免明文落盘）
+        route_key = route.get("apiKey")
+        if not route_key and route.get("apiKeyEnv"):
+            route_key = os.environ.get(route["apiKeyEnv"])
+        auth_style = route.get("authStyle") or "bearer"
 
         def on_headers(status, headers):
             self.send_response(status)
@@ -241,7 +274,7 @@ class BridgeHandler(http.server.BaseHTTPRequestHandler):
         for attempt in (1, 2):
             try:
                 asyncio.run(_forward(host, port, self.command, target_path,
-                                     header_items, body, route.get("apiKey"),
+                                     header_items, body, route_key, auth_style,
                                      on_headers, on_data))
                 last_err = None
                 break

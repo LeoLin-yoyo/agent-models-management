@@ -1,19 +1,20 @@
 // REST API 路由
+const path = require('path');
 const express = require('express');
 const fs = require('fs');
-const path = require('path');
 const opencodeStore = require('./opencodeStore');
 const piStore = require('./piStore');
 const probe = require('./probe');
 const cli = require('./cliRunner');
 const crossSync = require('./crossSync');
 const bridge = require('./bridge');
+const bridgeProviders = require('./bridgeProviders');
+const { DATA_DIR } = require('./paths');
 
 const router = express.Router();
 const STORES = { opencode: opencodeStore, pi: piStore };
 
-// 测试结果持久化（重启后仍能看到上次测试状态）
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// 测试结果持久化（重启后仍能看到上次测试状态）；AMMP_DATA_DIR 可换目录（隔离测试）
 const STATE_FILE = path.join(DATA_DIR, 'test-results.json');
 let testState = {};
 try {
@@ -38,6 +39,12 @@ function findProvider(tool, providerId) {
   const prov = store.read().providers.find((x) => x.id === providerId);
   if (!prov) throw new Error(`${tool} 中不存在 provider: ${providerId}`);
   return { store, prov };
+}
+
+// 该 provider 的请求是否经本地桥接转发（走桥接的 provider，Key 已在桥接模型里配好，
+// 不再做 Key 存在性校验：读不到值就透传给上游判定，由上游返回 401 等真实结果）
+function isBridged(tool, prov) {
+  return bridge.providerBridgeInfo(tool, prov.id, prov.baseUrl).bridged;
 }
 
 // ---------- 总览 ----------
@@ -77,31 +84,7 @@ router.post('/providers/create', async (req, res, next) => {
 router.post('/providers/update', async (req, res, next) => {
   try {
     const { tool, id, patch } = req.body || {};
-    let p = patch || {};
-    // 正在桥接的 provider：用户编辑的是「原上游地址」，
-    // 同步更新路由的 upstream/originalBaseUrl，并把实际写入配置的地址重新改写成桥接地址
-    const store = getStore(tool);
-    const existing = store.read().providers.find((x) => x.id === id);
-    const binfo = existing ? bridge.providerBridgeInfo(tool, id, existing.baseUrl) : null;
-    if (binfo && binfo.bridged && p.baseUrl
-        && !bridge.parseBridgeUrl(p.baseUrl)) {
-      let origin;
-      try {
-        origin = new URL(p.baseUrl).origin;
-      } catch {
-        throw new Error(`BaseURL 不是合法 URL：${p.baseUrl}`);
-      }
-      const route = bridge.getRoute(binfo.routeId) || {};
-      bridge.setRoute(binfo.routeId, {
-        ...route,
-        upstream: origin,
-        originalBaseUrl: p.baseUrl,
-        tool,
-        providerId: p.newId || id,
-      });
-      p = { ...p, baseUrl: bridge.bridgeBaseUrl(binfo.routeId, p.baseUrl) };
-    }
-    await store.updateProvider(id, p);
+    await getStore(tool).updateProvider(id, patch || {});
     res.json({ ok: true });
   } catch (e) {
     next(e);
@@ -202,7 +185,7 @@ router.get('/providers/remote-models', async (req, res, next) => {
     const { tool, provider } = req.query;
     const { store, prov } = findProvider(tool, provider);
     const apiKey = store.resolveKey(provider);
-    if (!apiKey) throw new Error('未找到该 provider 的 API key，无法拉取远端列表');
+    if (!apiKey && !isBridged(tool, prov)) throw new Error('未找到该 provider 的 API key，无法拉取远端列表');
     const remote = await probe.listRemoteModels({ baseUrl: prov.baseUrl, apiKey, style: prov.style });
     const configured = prov.models.map((m) => m.id);
     const inSet = new Set(configured);
@@ -234,7 +217,7 @@ router.post('/test', async (req, res, next) => {
           : await cli.testViaPi(providerId, modelId);
     } else {
       const apiKey = store.resolveKey(providerId);
-      if (!apiKey) throw new Error('未找到该 provider 的 API key，无法直接测试');
+      if (!apiKey && !isBridged(tool, prov)) throw new Error('未找到该 provider 的 API key，无法直接测试');
       result = await probe.testModel({ baseUrl: prov.baseUrl, apiKey, style: prov.style, modelId });
     }
     const state = {
@@ -297,7 +280,7 @@ router.post('/chat', async (req, res, next) => {
     }
     const { store, prov } = findProvider(tool, providerId);
     const apiKey = store.resolveKey(providerId);
-    if (!apiKey) throw new Error('未找到该 provider 的 API key，无法即时问答');
+    if (!apiKey && !isBridged(tool, prov)) throw new Error('未找到该 provider 的 API key，无法即时问答');
     const r = await probe.chatOnce({ baseUrl: prov.baseUrl, apiKey, style: prov.style, modelId, messages });
     res.json({ ok: true, ...r });
   } catch (e) {
@@ -321,7 +304,7 @@ router.post('/chat/stream', async (req, res, next) => {
     }
     const { store, prov } = findProvider(tool, providerId);
     const apiKey = store.resolveKey(providerId);
-    if (!apiKey) throw new Error('未找到该 provider 的 API key，无法即时问答');
+    if (!apiKey && !isBridged(tool, prov)) throw new Error('未找到该 provider 的 API key，无法即时问答');
 
     res.setHeader('content-type', 'text/event-stream; charset=utf-8');
     res.setHeader('cache-control', 'no-cache');
@@ -389,61 +372,142 @@ router.post('/bridge/stop', async (req, res, next) => {
   }
 });
 
-// 给某个 provider 打开/关闭桥接：
-// enabled=true  -> 记录路由 + 把 BaseURL 改写为 http://127.0.0.1:<port>/<routeId><原路径>
-// enabled=false -> 恢复原 BaseURL（路由 meta 里的 originalBaseUrl）+ 视引用情况删除路由
-router.post('/bridge/toggle', async (req, res, next) => {
+// ---------- 桥接模型（「桥接管理」模块：独立配置 → 同步到 agent 工具） ----------
+// 桥接模型存 data/bridge-providers.json，与 agent 配置解耦；以下接口供「桥接管理」页使用。
+
+// 列表：附各工具副本状态、桥接地址与测试结果（key 不下发完整值）
+router.get('/bridge/providers', (req, res, next) => {
   try {
-    const { tool, providerId, enabled } = req.body || {};
-    const { store, prov } = findProvider(tool, providerId);
-    const cfg = bridge.readConfig();
+    const port = bridge.readConfig().port;
+    const providers = bridgeProviders.list().map((bp) => {
+      const d = bridgeProviders.describe(bp);
+      d.models = d.models.map((m) => ({
+        ...m,
+        test: testState[stateKey('bridge', bp.id, m.id)] || null,
+      }));
+      return d;
+    });
+    res.json({ ok: true, port, providers });
+  } catch (e) {
+    next(e);
+  }
+});
 
-    if (enabled) {
-      const parsed = bridge.parseBridgeUrl(prov.baseUrl, cfg.port);
-      if (parsed) {
-        const route = bridge.getRoute(parsed.routeId);
-        return res.json({
-          ok: true, already: true, bridged: true, routeId: parsed.routeId,
-          upstream: route ? route.upstream : null, baseUrl: prov.baseUrl,
-        });
-      }
-      let upstreamOrigin;
-      try {
-        upstreamOrigin = new URL(prov.baseUrl).origin;
-      } catch {
-        throw new Error(`BaseURL 不是合法 URL，无法桥接：${prov.baseUrl}`);
-      }
-      const routeId = bridge.pickRouteId(tool, providerId, upstreamOrigin);
-      bridge.setRoute(routeId, {
-        upstream: upstreamOrigin,
-        tool,
-        providerId,
-        originalBaseUrl: prov.baseUrl,
-      });
-      const newBase = bridge.bridgeBaseUrl(routeId, prov.baseUrl);
-      await store.updateProvider(providerId, { baseUrl: newBase });
-      const startR = await bridge.ensureRunning();
-      return res.json({
-        ok: true, bridged: true, routeId, upstream: upstreamOrigin,
-        baseUrl: newBase, started: startR,
-      });
-    }
+router.post('/bridge/providers/create', async (req, res, next) => {
+  try {
+    const bp = bridgeProviders.create(req.body || {});
+    bridge.ensureRunning().catch(() => {}); // 顺手拉起桥接进程（按需，失败不影响创建）
+    res.json({ ok: true, provider: bridgeProviders.describe(bp) });
+  } catch (e) {
+    next(e);
+  }
+});
 
-    // 关闭桥接
-    const parsed = bridge.parseBridgeUrl(prov.baseUrl, cfg.port);
-    if (!parsed) {
-      return res.json({ ok: true, already: true, bridged: false, baseUrl: prov.baseUrl });
-    }
-    const route = bridge.getRoute(parsed.routeId);
-    if (!route || !route.originalBaseUrl) {
-      throw new Error('找不到该 provider 的原上游地址记录（可能是手动改写的 BaseURL），请手动编辑恢复');
-    }
-    await store.updateProvider(providerId, { baseUrl: route.originalBaseUrl });
-    const ref = bridge.routeReferencedElsewhere(parsed.routeId, tool, providerId, STORES);
-    if (!ref) bridge.removeRoute(parsed.routeId);
-    return res.json({
-      ok: true, bridged: false, baseUrl: route.originalBaseUrl,
-      routeKept: !!ref, routeKeptBy: ref,
+router.post('/bridge/providers/update', async (req, res, next) => {
+  try {
+    const { id, patch } = req.body || {};
+    const r = await bridgeProviders.update(id, patch || {});
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/bridge/providers/delete', async (req, res, next) => {
+  try {
+    const { id } = req.body || {};
+    const r = await bridgeProviders.remove(id);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/bridge/providers/models/add', async (req, res, next) => {
+  try {
+    const { id, models } = req.body || {};
+    const r = await bridgeProviders.addModels(id, models);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    next(e);
+  }
+});
+
+router.post('/bridge/providers/models/delete', async (req, res, next) => {
+  try {
+    const { id, modelIds } = req.body || {};
+    const r = await bridgeProviders.deleteModels(id, modelIds);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 同步开关：enabled=true → 在工具配置里创建/覆盖指向本地桥接的 provider 副本；
+// enabled=false → 从工具配置删除副本（仅删本桥接模型的副本，且删除前自动备份）
+router.post('/bridge/providers/sync', async (req, res, next) => {
+  try {
+    const { id, tool, enabled } = req.body || {};
+    const r = enabled
+      ? await bridgeProviders.syncToTool(id, tool)
+      : await bridgeProviders.unsyncFromTool(id, tool);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 经桥接的 API 测试：请求走 http://127.0.0.1:<port>/<routeId>... 由 QUIC 转发到上游
+// Key 已在添加桥接模型时配置好，这里不再校验（读不到值时直接透传，由上游判定；无 key 则不注入鉴权头）
+router.post('/bridge/providers/test', async (req, res, next) => {
+  try {
+    const { id, modelId } = req.body || {};
+    const bp = bridgeProviders.getOrThrow(id);
+    if (!bp.models.some((m) => m.id === modelId)) throw new Error(`桥接模型 ${id} 中不存在模型: ${modelId}`);
+    await bridge.ensureRunning().catch(() => {});
+    const started = Date.now();
+    const result = await probe.testModel({
+      baseUrl: bridgeProviders.bridgedUrl(bp),
+      apiKey: bridgeProviders.resolveKey(bp),
+      style: bp.style,
+      modelId,
+    });
+    const state = {
+      ok: !!result.ok,
+      via: 'api',
+      latencyMs: result.latencyMs || Date.now() - started,
+      error: result.error || null,
+      snippet: result.snippet || '',
+      checkedAt: new Date().toISOString(),
+    };
+    testState[stateKey('bridge', id, modelId)] = state;
+    saveTestState();
+    res.json({ ok: true, result: state });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// 经桥接拉取远端模型列表（diff 出新增/未列出）；Key 已在桥接模型里配置，不再校验
+router.get('/bridge/providers/remote-models', async (req, res, next) => {
+  try {
+    const bp = bridgeProviders.getOrThrow(req.query.id);
+    await bridge.ensureRunning().catch(() => {});
+    const remote = await probe.listRemoteModels({
+      baseUrl: bridgeProviders.bridgedUrl(bp),
+      apiKey: bridgeProviders.resolveKey(bp),
+      style: bp.style,
+    });
+    const configured = bp.models.map((m) => m.id);
+    const inSet = new Set(configured);
+    const remoteSet = new Set(remote.models);
+    res.json({
+      ok: true,
+      remote: remote.models,
+      remoteCount: remote.total,
+      configured,
+      added: remote.models.filter((x) => !inSet.has(x)),
+      removed: configured.filter((x) => !remoteSet.has(x)),
     });
   } catch (e) {
     next(e);

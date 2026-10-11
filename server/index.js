@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const api = require('./routes');
 const bridge = require('./bridge');
+const bridgeProviders = require('./bridgeProviders');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -33,6 +34,12 @@ function listen(port, triesLeft) {
     const url = `http://127.0.0.1:${port}`;
     console.log(`agent-models-management 已启动: ${url}`);
     openBrowser(url);
+    // 桥接模型注册表：旧数据迁移 + 路由补齐（独立模块；失败不影响主服务）
+    try {
+      bridgeProviders.init();
+    } catch (e) {
+      console.error('[桥接模型] 初始化失败:', e.message);
+    }
     // 桥接：按需拉起（静默子进程；失败不影响主服务）
     bridge
       .ensureRunning()

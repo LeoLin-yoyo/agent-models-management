@@ -19,8 +19,10 @@ if %errorlevel%==0 (
   exit /b 0
 )
 
-echo [ammp] starting service in background window (title: AMMP)...
-start "AMMP" /min cmd /c "cd /d %AMMP_DIR% && node server\index.js"
+rem Launch fully hidden via wscript: a plain "start /min cmd" still shows a
+rem console window, and the QUIC bridge must never pop one up either.
+echo [ammp] starting service (hidden)...
+wscript //nologo //B "%~dp0run_hidden.vbs" "%~dp0ammp_run.cmd"
 ping -n 3 127.0.0.1 >NUL
 curl -s -o NUL -m 2 "%AMMP_URL%/api/overview" >NUL 2>&1
 if %errorlevel%==0 (

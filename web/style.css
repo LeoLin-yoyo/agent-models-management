@@ -40,7 +40,25 @@ header {
 .brand h1 { font-size: 18px; font-weight: 600; }
 .sub { color: var(--text-dim); font-size: 12px; }
 
+/* ---------- 页签（模型配置 / 桥接管理） ---------- */
+.tabs { display: flex; gap: 4px; margin-left: 14px; }
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.tab:hover { color: var(--text); background: var(--bg-hover); }
+.tab.active { color: var(--text); background: var(--bg-hover); border-color: var(--border); }
+
 .header-actions { display: flex; gap: 8px; }
+.actions-group { display: flex; gap: 8px; }
+.hidden { display: none !important; }
 
 main {
   flex: 1;
@@ -48,8 +66,11 @@ main {
   min-height: 0;
 }
 
+/* 一级视图容器：模型配置 / 桥接管理 各自带侧栏 + 内容区 */
+.view { flex: 1; display: flex; min-height: 0; min-width: 0; }
+
 /* ---------- 侧边栏 ---------- */
-#sidebar {
+#sidebar, #bridge-sidebar {
   width: 250px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
@@ -89,10 +110,11 @@ main {
 .side-empty { color: var(--text-dim); font-size: 12px; padding: 4px 10px; }
 
 /* ---------- 主区域 ---------- */
-#content {
+#content, #bridge-content {
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
+  min-width: 0;
 }
 
 .provider-card {
@@ -146,6 +168,7 @@ table.models tr:hover td { background: rgba(255,255,255,.02); }
 .badge.ok { background: rgba(52,192,124,.14); color: var(--green); }
 .badge.fail { background: rgba(224,86,106,.14); color: var(--red); max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
 .badge.pending { background: rgba(224,160,60,.14); color: var(--orange); }
+.badge.warn { background: rgba(224,160,60,.14); color: var(--orange); }
 .badge.none { background: var(--bg-hover); color: var(--text-dim); }
 .badge .via { font-size: 10px; opacity: .75; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
 
@@ -243,7 +266,7 @@ table.models tr:hover td { background: rgba(255,255,255,.02); }
 }
 .search-input:focus { outline: none; border-color: var(--accent); }
 .search-input::placeholder { color: var(--text-dim); }
-#sidebar .search-input { margin: 0 2px 10px; }
+#sidebar .search-input, #bridge-sidebar .search-input { margin: 0 2px 10px; }
 .search-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .search-row .search-input { flex: 1; }
 .modal-toolbar { margin-bottom: 12px; }
@@ -356,6 +379,26 @@ table.models tr:hover td { background: rgba(255,255,255,.02); }
 .chip.ok { color: var(--green); border-color: rgba(52,192,124,.55); }
 .chip.warn { color: var(--orange); border-color: rgba(224,160,60,.55); }
 .tag.bridge { color: var(--accent); border-color: rgba(79,140,255,.55); }
+
+/* ---------- 桥接管理：同步卡片 ---------- */
+.sync-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+.sync-card h3 { font-size: 14px; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+.sync-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--border);
+}
+.sync-tool-row:first-of-type { border-top: none; }
+.sync-tool-row .tool-name { width: 80px; flex-shrink: 0; font-weight: 600; font-size: 13px; }
+.sync-tool-row .spacer { flex: 1; }
 
 /* ---------- 滚动条 ---------- */
 * {

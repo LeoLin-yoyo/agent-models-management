@@ -10,8 +10,10 @@ function joinUrl(base, p) {
   return String(base).replace(/\/+$/, '') + p;
 }
 
+// 鉴权头：有 key 才注入（key 为空时不要发 "Bearer null" 之类的脏头）
 function authHeaders(key, style) {
   const h = { 'content-type': 'application/json', accept: 'application/json' };
+  if (!key) return h;
   if (style === 'anthropic-messages') {
     h['x-api-key'] = key;
     h['anthropic-version'] = '2023-06-01';
@@ -35,6 +37,7 @@ async function fetchJson(url, { method = 'GET', headers, body, timeoutMs = 30000
 }
 
 // 拉取远端模型列表（OpenAI 兼容 GET /models；兼容 data/models 数组、裸数组等响应形态）
+// apiKey 缺省/为空时不注入鉴权头（由上游或网关自行判定）
 async function listRemoteModels({ baseUrl, apiKey, style }) {
   const url = joinUrl(baseUrl, '/models');
   const headers = { accept: 'application/json' };

@@ -1,11 +1,12 @@
 // 桥接管理：本地 TCP→HTTP/3 桥接进程的配置、路由与生命周期
 // 桥接本体是 bridge/quic_bridge.py（Node 生态无 HTTP/3 客户端，用 Python+aioquic 实现），
 // 由本模块作为子进程拉起（windowsHide，静默）；配置存 data/bridge.json，改动即时生效。
+// 「桥接模型」层的路由供给（哪个路由对应哪个桥接模型）在 server/bridgeProviders.js 中管理。
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { DATA_DIR } = require('./paths');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'bridge.json');
 const LOG_FILE = path.join(DATA_DIR, 'bridge.log');
 const SCRIPT = path.join(__dirname, '..', 'bridge', 'quic_bridge.py');
@@ -22,10 +23,22 @@ let stopping = false;
 let restarts = 0;
 let startedAt = null;
 
+// 优先使用 pythonw.exe：它没有控制台子系统，从根上避免弹出命令行窗口
+// （windowsHide 对控制台程序并不总是可靠；python.exe 被别处手动拉起时更会直接弹窗）
+function preferPythonw(p) {
+  try {
+    if (typeof p === 'string' && /python\.exe$/i.test(p)) {
+      const w = p.replace(/python\.exe$/i, 'pythonw.exe');
+      if (fs.existsSync(w)) return w;
+    }
+  } catch {}
+  return p;
+}
+
 function detectPython() {
   for (const c of PYTHON_CANDIDATES) {
     try {
-      if (c === 'python' || fs.existsSync(c)) return c;
+      if (c === 'python' || fs.existsSync(c)) return preferPythonw(c);
     } catch {}
   }
   return 'python';
@@ -38,7 +51,10 @@ function defaultConfig() {
 function readConfig() {
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    return { ...defaultConfig(), ...raw, routes: raw.routes || {} };
+    const merged = { ...defaultConfig(), ...raw, routes: raw.routes || {} };
+    // 老配置里存的是 python.exe：存在 pythonw 时自动升级，避免弹窗
+    merged.python = preferPythonw(merged.python);
+    return merged;
   } catch {
     return defaultConfig();
   }
@@ -73,7 +89,14 @@ function getStatus() {
     enabled: cfg.enabled,
     port: cfg.port,
     python: cfg.python,
-    routes: Object.entries(cfg.routes).map(([id, r]) => ({ id, ...r })),
+    // 路由里的鉴权字段只回传「有没有」，绝不把 key 下发给前端
+    routes: Object.entries(cfg.routes).map(([id, r]) => ({
+      id,
+      ...r,
+      apiKey: undefined,
+      apiKeyEnv: undefined,
+      hasKey: !!(r.apiKey || r.apiKeyEnv),
+    })),
     configFile: CONFIG_FILE,
     logFile: LOG_FILE,
     script: SCRIPT,
@@ -148,7 +171,8 @@ async function ensureRunning() {
 
 function setRoute(routeId, info) {
   const cfg = readConfig();
-  cfg.routes[routeId] = { addedAt: new Date().toISOString(), ...info };
+  const prev = cfg.routes[routeId] || {};
+  cfg.routes[routeId] = { addedAt: prev.addedAt || new Date().toISOString(), ...info };
   writeConfig(cfg);
   return cfg.routes[routeId];
 }
@@ -193,21 +217,9 @@ function bridgeBaseUrl(routeId, originalBaseUrl, port) {
   return `http://127.0.0.1:${cfgPort}/${routeId}${p}`;
 }
 
-// 为 (tool, providerId) 选一个不与现有路由冲突的 routeId
-function pickRouteId(tool, providerId, upstreamOrigin) {
-  const cfg = readConfig();
-  const tryIds = [providerId, `${tool}-${providerId}`];
-  for (const id of tryIds) {
-    const exist = cfg.routes[id];
-    if (!exist) return id;
-    if (exist.upstream === upstreamOrigin && exist.tool === tool) return id;
-  }
-  let i = 2;
-  while (cfg.routes[`${tool}-${providerId}-${i}`]) i += 1;
-  return `${tool}-${providerId}-${i}`;
-}
-
 // provider 的桥接状态（供 overview 标注 / 前端徽标）
+// bridgeProviderId：该路由由哪个「桥接模型」供给（bridgeProviders.js 管理）；legacy=true 表示
+// 指向桥接但没有对应路由（历史残留，可在桥接管理里重新配置后覆盖）
 function providerBridgeInfo(tool, providerId, baseUrl) {
   const cfg = readConfig();
   const parsed = parseBridgeUrl(baseUrl, cfg.port);
@@ -218,6 +230,7 @@ function providerBridgeInfo(tool, providerId, baseUrl) {
       routeId: parsed.routeId,
       upstream: r ? r.upstream : null,
       originalBaseUrl: r ? r.originalBaseUrl || null : null,  // 原上游地址（含 /v1 路径）
+      bridgeProviderId: r ? r.bridgeProviderId || null : null,
       legacy: !r,                    // 指向桥接但没有对应路由（历史残留）
       port: cfg.port,
     };
@@ -225,7 +238,7 @@ function providerBridgeInfo(tool, providerId, baseUrl) {
   return { bridged: false, port: cfg.port };
 }
 
-// 判断某个路由是否仍被任一工具配置引用（toggle 关闭时决定要不要删路由）
+// 判断某个路由是否仍被任一工具配置引用（删除路由前判断是否需要保留）
 function routeReferencedElsewhere(routeId, exceptTool, exceptProviderId, stores) {
   for (const [tool, store] of Object.entries(stores)) {
     let data;
@@ -259,7 +272,6 @@ module.exports = {
   removeRoute,
   parseBridgeUrl,
   bridgeBaseUrl,
-  pickRouteId,
   providerBridgeInfo,
   routeReferencedElsewhere,
 };

@@ -1,19 +1,27 @@
-// 两个 agent 工具的配置文件定位 + 写前备份
+// 两个 agent 工具的配置文件定位 + 写前备份 + 平台共享数据目录
+// 路径基座可用环境变量覆盖（隔离测试 / 特殊部署）：AMMP_HOME 换用户主目录，AMMP_DATA_DIR 换数据目录
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const HOME = process.env.AMMP_HOME ? path.resolve(process.env.AMMP_HOME) : os.homedir();
+
+// 平台运行数据（桥接配置、桥接模型注册表、测试结果、日志）默认放在仓库 data/ 下
+const DATA_DIR = process.env.AMMP_DATA_DIR
+  ? path.resolve(process.env.AMMP_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
+
 const CONFIG_PATHS = {
   opencode: findFirst([
-    path.join(os.homedir(), '.config', 'opencode', 'opencode.jsonc'),
-    path.join(os.homedir(), '.config', 'opencode', 'opencode.json'),
+    path.join(HOME, '.config', 'opencode', 'opencode.jsonc'),
+    path.join(HOME, '.config', 'opencode', 'opencode.json'),
   ]),
-  pi: path.join(os.homedir(), '.pi', 'agent', 'models.json'),
-  piAuth: path.join(os.homedir(), '.pi', 'agent', 'auth.json'),
+  pi: path.join(HOME, '.pi', 'agent', 'models.json'),
+  piAuth: path.join(HOME, '.pi', 'agent', 'auth.json'),
   // pi 的全局设置（默认模型 defaultProvider/defaultModel/defaultThinkingLevel 存这里）
-  piSettings: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
+  piSettings: path.join(HOME, '.pi', 'agent', 'settings.json'),
   // opencode 的凭据文件（/connect 写入），实测带 UTF-8 BOM
-  ocAuth: path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
+  ocAuth: path.join(HOME, '.local', 'share', 'opencode', 'auth.json'),
 };
 
 // 读 JSON 文本并剥掉 UTF-8 BOM（opencode 的 auth.json 实测带 BOM，直接 parse 会炸）
@@ -49,4 +57,4 @@ function withLock(key, fn) {
   return next;
 }
 
-module.exports = { CONFIG_PATHS, backupConfig, withLock, readJsonNoBom };
+module.exports = { CONFIG_PATHS, DATA_DIR, HOME, backupConfig, withLock, readJsonNoBom };
